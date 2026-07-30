@@ -1,3 +1,5 @@
+import { auth } from "./firebase.js";
+
 export interface Item {
   id: number;
   type: "note" | "task";
@@ -25,36 +27,37 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// Shared secret baked in at build time (see infra notes in README) — deters
-// opportunistic bots hitting the public URL, not a substitute for real
-// per-user auth (out of scope for this single-user demo).
-const authHeaders: HeadersInit = import.meta.env.VITE_API_KEY
-  ? { "x-api-key": import.meta.env.VITE_API_KEY }
-  : {};
+// Every request carries the signed-in user's Firebase ID token so the server
+// can verify identity and scope data to that user (see requireAuth).
+async function authHeaders(): Promise<HeadersInit> {
+  const token = await auth.currentUser?.getIdToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export const api = {
-  listItems: () => fetch("/api/items", { headers: authHeaders }).then((r) => json<Item[]>(r)),
+  listItems: async () => fetch("/api/items", { headers: await authHeaders() }).then((r) => json<Item[]>(r)),
 
-  createItem: (item: Pick<Item, "type" | "title" | "content" | "status">) =>
+  createItem: async (item: Pick<Item, "type" | "title" | "content" | "status">) =>
     fetch("/api/items", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders },
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
       body: JSON.stringify(item),
     }).then((r) => json<Item>(r)),
 
-  updateItem: (id: number, item: Partial<Item>) =>
+  updateItem: async (id: number, item: Partial<Item>) =>
     fetch(`/api/items/${id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json", ...authHeaders },
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
       body: JSON.stringify(item),
     }).then((r) => json<Item>(r)),
 
-  deleteItem: (id: number) => fetch(`/api/items/${id}`, { method: "DELETE", headers: authHeaders }),
+  deleteItem: async (id: number) =>
+    fetch(`/api/items/${id}`, { method: "DELETE", headers: await authHeaders() }),
 
-  chat: (message: string) =>
+  chat: async (message: string) =>
     fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders },
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
       body: JSON.stringify({ message }),
     }).then((r) => json<ChatResponse>(r)),
 };

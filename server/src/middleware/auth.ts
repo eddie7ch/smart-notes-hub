@@ -1,23 +1,35 @@
 import type { NextFunction, Request, Response } from "express";
+import { getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 
-// Gates write/AI endpoints with a shared API key so the public Cloud Run URL
-// can't be used by strangers to burn paid OpenAI/Anthropic quota.
-export function requireApiKey(req: Request, res: Response, next: NextFunction) {
-  const configuredKey = process.env.API_KEY;
-  if (!configuredKey) {
-    if (process.env.NODE_ENV === "production") {
-      res.status(500).json({ error: "Server misconfigured: API_KEY is not set" });
-      return;
+declare global {
+  namespace Express {
+    interface Request {
+      userId?: string;
     }
-    // No key configured in local dev: fail open for convenience.
-    next();
+  }
+}
+
+if (!getApps().length) {
+  // On Cloud Run this picks up the project + credentials from the metadata
+  // server automatically; locally it uses `gcloud auth application-default login`.
+  initializeApp();
+}
+
+// Verifies a Firebase Auth ID token so each user only ever sees their own
+// notes/tasks — real per-user identity, not just a shared bot-deterrence key.
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const header = req.header("authorization");
+  if (!header?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Missing bearer token" });
     return;
   }
 
-  const provided = req.header("x-api-key");
-  if (provided !== configuredKey) {
-    res.status(401).json({ error: "Missing or invalid x-api-key header" });
-    return;
+  try {
+    const decoded = await getAuth().verifyIdToken(header.slice("Bearer ".length));
+    req.userId = decoded.uid;
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid or expired token" });
   }
-  next();
 }

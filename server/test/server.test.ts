@@ -1,24 +1,59 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { app } from "../src/index.js";
+
+// Keep tests off the real local-dev sqlite file.
+process.env.DB_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-data.db");
+
+vi.mock("firebase-admin/app", () => ({
+  initializeApp: vi.fn(),
+  getApps: vi.fn(() => []),
+}));
+
+vi.mock("firebase-admin/auth", () => ({
+  getAuth: () => ({
+    verifyIdToken: async (token: string) => {
+      if (token === "user-1-token") return { uid: "user-1" };
+      if (token === "user-2-token") return { uid: "user-2" };
+      throw new Error("invalid token");
+    },
+  }),
+}));
+
+const { app } = await import("../src/index.js");
 
 describe("GET /health", () => {
-  it("returns ok without requiring an API key", async () => {
+  it("returns ok without requiring auth", async () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "ok" });
   });
 });
 
-describe("API key enforcement", () => {
-  it("rejects item creation without x-api-key when API_KEY is set", async () => {
-    process.env.API_KEY = "test-secret";
-    const res = await request(app).post("/api/items").send({
-      type: "note",
-      title: "t",
-      content: "c",
-    });
+describe("auth enforcement", () => {
+  it("rejects item access without a bearer token", async () => {
+    const res = await request(app).get("/api/items");
     expect(res.status).toBe(401);
-    delete process.env.API_KEY;
+  });
+
+  it("rejects an invalid token", async () => {
+    const res = await request(app).get("/api/items").set("Authorization", "Bearer garbage");
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("per-user data isolation", () => {
+  it("only returns items created by the same user", async () => {
+    await request(app)
+      .post("/api/items")
+      .set("Authorization", "Bearer user-1-token")
+      .send({ type: "note", title: "user 1 note", content: "secret" });
+
+    const user1Items = await request(app).get("/api/items").set("Authorization", "Bearer user-1-token");
+    const user2Items = await request(app).get("/api/items").set("Authorization", "Bearer user-2-token");
+
+    expect(user1Items.body.length).toBeGreaterThan(0);
+    expect(user2Items.body).toEqual([]);
   });
 });

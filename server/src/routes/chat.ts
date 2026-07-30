@@ -12,7 +12,7 @@ chatRouter.post("/", async (req, res) => {
   }
 
   try {
-    const sources = await semanticSearch(message, 5);
+    const sources = await semanticSearch(req.userId!, message, 5);
     const context = sources
       .map((s, i) => `[${i + 1}] (${s.type}) ${s.title}\n${s.content}`)
       .join("\n\n");

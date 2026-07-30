@@ -7,7 +7,7 @@ import { pinoHttp } from "pino-http";
 import { itemsRouter } from "./routes/items.js";
 import { searchRouter } from "./routes/search.js";
 import { chatRouter } from "./routes/chat.js";
-import { requireApiKey } from "./middleware/auth.js";
+import { requireAuth } from "./middleware/auth.js";
 import { aiRateLimiter, generalRateLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./logger.js";
 
@@ -21,9 +21,9 @@ app.use(generalRateLimiter);
 // Cloud Run intercepts /healthz at the edge, so a custom /health path is used instead.
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
-app.use("/api/items", requireApiKey, itemsRouter);
-app.use("/api/search", requireApiKey, aiRateLimiter, searchRouter);
-app.use("/api/chat", requireApiKey, aiRateLimiter, chatRouter);
+app.use("/api/items", requireAuth, itemsRouter);
+app.use("/api/search", requireAuth, aiRateLimiter, searchRouter);
+app.use("/api/chat", requireAuth, aiRateLimiter, chatRouter);
 
 // Serve the built client so the API and UI ship as a single Cloud Run service.
 const clientDist = path.join(__dirname, "..", "..", "client", "dist");

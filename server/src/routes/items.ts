@@ -1,16 +1,11 @@
 import { Router } from "express";
-import { db, type Item } from "../db.js";
+import { itemRepository, type Item } from "../db.js";
 import { embedText } from "../services/embeddings.js";
 
 export const itemsRouter = Router();
 
-itemsRouter.get("/", (_req, res) => {
-  const rows = db
-    .prepare(
-      "SELECT id, type, title, content, status, created_at, updated_at FROM items ORDER BY updated_at DESC"
-    )
-    .all();
-  res.json(rows);
+itemsRouter.get("/", async (req, res) => {
+  res.json(await itemRepository.list(req.userId!));
 });
 
 itemsRouter.post("/", async (req, res) => {
@@ -28,49 +23,36 @@ itemsRouter.post("/", async (req, res) => {
     console.error("Embedding failed:", (err as Error).message);
   }
 
-  const result = db
-    .prepare(
-      "INSERT INTO items (type, title, content, status, embedding) VALUES (?, ?, ?, ?, ?)"
-    )
-    .run(type, title, content, status ?? "open", embedding);
-
-  res.status(201).json({ id: Number(result.lastInsertRowid), type, title, content, status: status ?? "open" });
+  const item = await itemRepository.create(req.userId!, type, title, content, status ?? "open", embedding);
+  res.status(201).json({ id: item.id, type: item.type, title: item.title, content: item.content, status: item.status });
 });
 
 itemsRouter.put("/:id", async (req, res) => {
   const id = Number(req.params.id);
   const { title, content, status } = req.body as Partial<Item>;
 
-  const existing = db.prepare("SELECT * FROM items WHERE id = ?").get(id) as unknown as
-    | Item
-    | undefined;
+  const existing = await itemRepository.get(id, req.userId!);
   if (!existing) {
     res.status(404).json({ error: "Item not found" });
     return;
   }
 
-  const nextTitle = title ?? existing.title;
-  const nextContent = content ?? existing.content;
-  const nextStatus = status ?? existing.status;
-
-  let embedding = existing.embedding;
+  let embedding: string | null | undefined;
   if (title || content) {
     try {
-      embedding = JSON.stringify(await embedText(`${nextTitle}\n${nextContent}`));
+      embedding = JSON.stringify(
+        await embedText(`${title ?? existing.title}\n${content ?? existing.content}`)
+      );
     } catch (err) {
       console.error("Embedding failed:", (err as Error).message);
     }
   }
 
-  db.prepare(
-    "UPDATE items SET title = ?, content = ?, status = ?, embedding = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(nextTitle, nextContent, nextStatus, embedding, id);
-
-  res.json({ id, type: existing.type, title: nextTitle, content: nextContent, status: nextStatus });
+  const updated = await itemRepository.update(id, req.userId!, { title, content, status, embedding });
+  res.json({ id, type: updated!.type, title: updated!.title, content: updated!.content, status: updated!.status });
 });
 
-itemsRouter.delete("/:id", (req, res) => {
-  const id = Number(req.params.id);
-  db.prepare("DELETE FROM items WHERE id = ?").run(id);
+itemsRouter.delete("/:id", async (req, res) => {
+  await itemRepository.remove(Number(req.params.id), req.userId!);
   res.status(204).send();
 });
