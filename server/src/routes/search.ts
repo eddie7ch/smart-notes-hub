@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, type Item } from "../db.js";
+import { itemRepository } from "../db.js";
 import { embedText, cosineSimilarity } from "../services/embeddings.js";
 
 export const searchRouter = Router();
@@ -12,11 +12,9 @@ interface ScoredItem {
   score: number;
 }
 
-export async function semanticSearch(query: string, k = 5): Promise<ScoredItem[]> {
+export async function semanticSearch(userId: string, query: string, k = 5): Promise<ScoredItem[]> {
   const queryEmbedding = await embedText(query);
-  const rows = db
-    .prepare("SELECT * FROM items WHERE embedding IS NOT NULL")
-    .all() as unknown as Item[];
+  const rows = await itemRepository.listWithEmbeddings(userId);
 
   return rows
     .map((row) => ({
@@ -37,7 +35,7 @@ searchRouter.post("/", async (req, res) => {
     return;
   }
   try {
-    res.json(await semanticSearch(query, k ?? 5));
+    res.json(await semanticSearch(req.userId!, query, k ?? 5));
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
   }
