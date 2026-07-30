@@ -1,8 +1,12 @@
 import { initializeApp } from "firebase/app";
 import {
+  browserLocalPersistence,
+  browserSessionPersistence,
   createUserWithEmailAndPassword,
   getAuth,
   onAuthStateChanged,
+  sendPasswordResetEmail,
+  setPersistence,
   signInWithEmailAndPassword,
   signOut,
   type User,
@@ -20,8 +24,13 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 export const auth = getAuth(firebaseApp);
 
-export function signIn(email: string, password: string) {
-  return signInWithEmailAndPassword(auth, email, password);
+// "Remember me" toggles whether the session survives closing the browser
+// (local storage) or is cleared when the tab/browser closes (session-only).
+// The password itself is never persisted anywhere on the client.
+export function signIn(email: string, password: string, rememberMe: boolean) {
+  return setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence).then(() =>
+    signInWithEmailAndPassword(auth, email, password)
+  );
 }
 
 export function signUp(email: string, password: string) {
@@ -30,6 +39,10 @@ export function signUp(email: string, password: string) {
 
 export function signOutUser() {
   return signOut(auth);
+}
+
+export function resetPassword(email: string) {
+  return sendPasswordResetEmail(auth, email);
 }
 
 export { onAuthStateChanged };
