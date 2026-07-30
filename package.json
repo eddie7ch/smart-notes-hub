@@ -1,0 +1,18 @@
+{
+  "name": "smart-notes-hub",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Full-stack AI notes & task hub with RAG-powered semantic search and chat",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace server",
+    "dev:client": "npm run dev --workspace client",
+    "build": "npm run build --workspace server && npm run build --workspace client",
+    "build:server": "npm run build --workspace server",
+    "build:client": "npm run build --workspace client",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace client"
+  }
+}
