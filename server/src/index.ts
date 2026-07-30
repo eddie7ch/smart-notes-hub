@@ -13,9 +13,9 @@ import { logger } from "./logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const app = express();
-// Cloud Run always sits behind a proxy; without this express-rate-limit
-// keys every client on the same internal IP instead of the real caller.
-app.set("trust proxy", true);
+// Cloud Run's frontend adds exactly one hop; trusting only that hop (vs `true`,
+// which trusts any number of hops) keeps express-rate-limit's client IP lookup safe.
+app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json());
 app.use(pinoHttp({ logger }));
