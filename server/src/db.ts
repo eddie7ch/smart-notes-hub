@@ -2,8 +2,17 @@ import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { cosineSimilarity } from "./services/embeddings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export interface ScoredItem {
+  id: number;
+  type: string;
+  title: string;
+  content: string;
+  score: number;
+}
 
 export interface Item {
   id: number;
@@ -38,6 +47,7 @@ export interface ItemRepository {
   ): Promise<Item>;
   update(id: number, userId: string, fields: UpdateFields): Promise<Item | undefined>;
   remove(id: number, userId: string): Promise<void>;
+  semanticSearch(userId: string, queryEmbedding: number[], k: number): Promise<ScoredItem[]>;
 }
 
 // Local-dev default: zero setup, no cost, no external DB required.
@@ -113,6 +123,21 @@ class SqliteItemRepository implements ItemRepository {
   async remove(id: number, userId: string): Promise<void> {
     this.db.prepare("DELETE FROM items WHERE id = ? AND user_id = ?").run(id, userId);
   }
+
+  // No vector index locally - fine at dev scale, computed in JS instead.
+  async semanticSearch(userId: string, queryEmbedding: number[], k: number): Promise<ScoredItem[]> {
+    const rows = await this.listWithEmbeddings(userId);
+    return rows
+      .map((row) => ({
+        id: row.id,
+        type: row.type,
+        title: row.title,
+        content: row.content,
+        score: cosineSimilarity(queryEmbedding, JSON.parse(row.embedding as string)),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, k);
+  }
 }
 
 // Production: Cloud SQL for PostgreSQL, reached either over Cloud Run's native
@@ -133,19 +158,40 @@ class PostgresItemRepository implements ItemRepository {
         })
       : new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
+    // pgvector gives real nearest-neighbor search in Postgres itself instead of
+    // pulling every row into Node and comparing vectors in a JS loop.
     this.ready = this.pool
-      .query(
-        `CREATE TABLE IF NOT EXISTS items (
-          id SERIAL PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          type TEXT NOT NULL CHECK (type IN ('note', 'task')),
-          title TEXT NOT NULL,
-          content TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'open',
-          embedding TEXT,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        );`
+      .query(`CREATE EXTENSION IF NOT EXISTS vector;`)
+      .then(() =>
+        this.pool.query(
+          `CREATE TABLE IF NOT EXISTS items (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('note', 'task')),
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            embedding vector(1536),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );`
+        )
+      )
+      .then(() =>
+        // One-time migration for instances created before pgvector was added,
+        // where embedding was a plain TEXT column of JSON-encoded floats.
+        this.pool.query(`
+          DO $$
+          BEGIN
+            IF EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'items' AND column_name = 'embedding' AND data_type = 'text'
+            ) THEN
+              ALTER TABLE items DROP COLUMN embedding;
+              ALTER TABLE items ADD COLUMN embedding vector(1536);
+            END IF;
+          END $$;
+        `)
       )
       .then(() => undefined);
   }
@@ -184,7 +230,7 @@ class PostgresItemRepository implements ItemRepository {
   ): Promise<Item> {
     await this.ready;
     const { rows } = await this.pool.query(
-      "INSERT INTO items (user_id, type, title, content, status, embedding) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+      "INSERT INTO items (user_id, type, title, content, status, embedding) VALUES ($1, $2, $3, $4, $5, $6::vector) RETURNING *",
       [userId, type, title, content, status, embedding]
     );
     return rows[0];
@@ -199,7 +245,7 @@ class PostgresItemRepository implements ItemRepository {
     const status = fields.status ?? existing.status;
     const embedding = fields.embedding !== undefined ? fields.embedding : existing.embedding;
     const { rows } = await this.pool.query(
-      "UPDATE items SET title = $1, content = $2, status = $3, embedding = $4, updated_at = now() WHERE id = $5 AND user_id = $6 RETURNING *",
+      "UPDATE items SET title = $1, content = $2, status = $3, embedding = $4::vector, updated_at = now() WHERE id = $5 AND user_id = $6 RETURNING *",
       [title, content, status, embedding, id, userId]
     );
     return rows[0];
@@ -208,6 +254,22 @@ class PostgresItemRepository implements ItemRepository {
   async remove(id: number, userId: string): Promise<void> {
     await this.ready;
     await this.pool.query("DELETE FROM items WHERE id = $1 AND user_id = $2", [id, userId]);
+  }
+
+  // Cosine distance computed by Postgres/pgvector itself (the `<=>` operator),
+  // not fetched into Node and compared in a JS loop - this is real vector-DB search.
+  async semanticSearch(userId: string, queryEmbedding: number[], k: number): Promise<ScoredItem[]> {
+    await this.ready;
+    const vectorLiteral = `[${queryEmbedding.join(",")}]`;
+    const { rows } = await this.pool.query(
+      `SELECT id, type, title, content, 1 - (embedding <=> $2::vector) AS score
+       FROM items
+       WHERE user_id = $1 AND embedding IS NOT NULL
+       ORDER BY embedding <=> $2::vector
+       LIMIT $3`,
+      [userId, vectorLiteral, k]
+    );
+    return rows;
   }
 }
 
