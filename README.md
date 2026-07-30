@@ -5,7 +5,7 @@ search and an AI chat assistant that can answer questions using your own
 notes as context. Built end-to-end (architecture, implementation, deployment,
 docs) as a single solo project.
 
-**Live demo:** _deployed to Google Cloud Run — see [Deployment](#deployment)_
+**Live demo:** [smart-notes-hub-651554012781.us-central1.run.app](https://smart-notes-hub-651554012781.us-central1.run.app) — deployed on Google Cloud Run
 
 ## Why this project
 
