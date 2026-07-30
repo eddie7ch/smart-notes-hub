@@ -57,3 +57,37 @@ describe("per-user data isolation", () => {
     expect(user2Items.body).toEqual([]);
   });
 });
+
+describe("GET /api/items pagination", () => {
+  it("respects a custom limit", async () => {
+    for (let i = 0; i < 3; i++) {
+      await request(app)
+        .post("/api/items")
+        .set("Authorization", "Bearer user-1-token")
+        .send({ type: "note", title: `paged note ${i}`, content: "x" });
+    }
+
+    const res = await request(app)
+      .get("/api/items?limit=2")
+      .set("Authorization", "Bearer user-1-token");
+
+    expect(res.status).toBe(200);
+    expect(res.body.length).toBe(2);
+  });
+
+  it("rejects an out-of-range limit", async () => {
+    const res = await request(app)
+      .get("/api/items?limit=0")
+      .set("Authorization", "Bearer user-1-token");
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a negative offset", async () => {
+    const res = await request(app)
+      .get("/api/items?offset=-1")
+      .set("Authorization", "Bearer user-1-token");
+
+    expect(res.status).toBe(400);
+  });
+});
