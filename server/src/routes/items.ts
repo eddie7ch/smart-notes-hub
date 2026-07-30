@@ -4,8 +4,25 @@ import { embedText } from "../services/embeddings.js";
 
 export const itemsRouter = Router();
 
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
 itemsRouter.get("/", async (req, res) => {
-  res.json(await itemRepository.list(req.userId!));
+  const limitParam = req.query.limit;
+  const offsetParam = req.query.offset;
+  const limit = limitParam !== undefined ? Number(limitParam) : DEFAULT_LIMIT;
+  const offset = offsetParam !== undefined ? Number(offsetParam) : 0;
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+    res.status(400).json({ error: `limit must be an integer between 1 and ${MAX_LIMIT}` });
+    return;
+  }
+  if (!Number.isInteger(offset) || offset < 0) {
+    res.status(400).json({ error: "offset must be a non-negative integer" });
+    return;
+  }
+
+  res.json(await itemRepository.list(req.userId!, limit, offset));
 });
 
 itemsRouter.post("/", async (req, res) => {

@@ -34,7 +34,7 @@ export interface UpdateFields {
 }
 
 export interface ItemRepository {
-  list(userId: string): Promise<Item[]>;
+  list(userId: string, limit: number, offset: number): Promise<Item[]>;
   listWithEmbeddings(userId: string): Promise<Item[]>;
   get(id: number, userId: string): Promise<Item | undefined>;
   create(
@@ -71,12 +71,12 @@ class SqliteItemRepository implements ItemRepository {
     `);
   }
 
-  async list(userId: string): Promise<Item[]> {
+  async list(userId: string, limit: number, offset: number): Promise<Item[]> {
     return this.db
       .prepare(
-        "SELECT id, user_id, type, title, content, status, created_at, updated_at FROM items WHERE user_id = ? ORDER BY updated_at DESC"
+        "SELECT id, user_id, type, title, content, status, created_at, updated_at FROM items WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?"
       )
-      .all(userId) as unknown as Item[];
+      .all(userId, limit, offset) as unknown as Item[];
   }
 
   async listWithEmbeddings(userId: string): Promise<Item[]> {
@@ -196,11 +196,11 @@ class PostgresItemRepository implements ItemRepository {
       .then(() => undefined);
   }
 
-  async list(userId: string): Promise<Item[]> {
+  async list(userId: string, limit: number, offset: number): Promise<Item[]> {
     await this.ready;
     const { rows } = await this.pool.query(
-      "SELECT id, user_id, type, title, content, status, created_at, updated_at FROM items WHERE user_id = $1 ORDER BY updated_at DESC",
-      [userId]
+      "SELECT id, user_id, type, title, content, status, created_at, updated_at FROM items WHERE user_id = $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3",
+      [userId, limit, offset]
     );
     return rows;
   }

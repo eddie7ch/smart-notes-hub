@@ -144,7 +144,7 @@ endpoints).
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/health` | none | Health check (used by Cloud Run, GCE watchdog, and Cloud Monitoring) |
-| GET | `/api/items` | Bearer token | List the signed-in user's notes/tasks |
+| GET | `/api/items` | Bearer token | List the signed-in user's notes/tasks, paginated (`?limit=` default 50/max 200, `?offset=` default 0) |
 | POST | `/api/items` | Bearer token | Create a note/task `{ type, title, content, status? }` |
 | PUT | `/api/items/:id` | Bearer token | Update a note/task (must be owned by the caller) |
 | DELETE | `/api/items/:id` | Bearer token | Delete a note/task (must be owned by the caller) |
