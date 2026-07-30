@@ -19,7 +19,7 @@ Built as a single, cohesive demonstration of full-stack + cloud + AI skills:
 | System design / architecture | Layered routes → services → data (see below) |
 | Git & documentation culture | This README, [ADRs](#architecture-decisions), [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | LLM APIs (OpenAI & Anthropic) | [`server/src/services/aiProvider.ts`](server/src/services/aiProvider.ts) — swappable provider |
-| Vector database / embeddings | [`server/src/services/embeddings.ts`](server/src/services/embeddings.ts) + [`server/src/routes/search.ts`](server/src/routes/search.ts) |
+| Vector database / embeddings | pgvector on Cloud SQL (Postgres) in production via [`server/src/db.ts`](server/src/db.ts), OpenAI embeddings via [`server/src/services/embeddings.ts`](server/src/services/embeddings.ts) |
 | GCE (VMs) / VPC networking | [`infra/gce-watchdog-startup.sh`](infra/gce-watchdog-startup.sh) — custom VPC + GCE VM watchdog, see below |
 | Per-user authentication | [`server/src/middleware/auth.ts`](server/src/middleware/auth.ts) — Firebase Authentication (email/password), Firebase ID tokens verified server-side |
 | Managed relational database | Cloud SQL for PostgreSQL (`db-f1-micro`), via [`server/src/db.ts`](server/src/db.ts) — see below |
@@ -37,9 +37,9 @@ flowchart LR
     UI -->|email/password| FirebaseAuth[Firebase Authentication]
     API -->|verifyIdToken| FirebaseAuth
     API --> Items[items routes\nCRUD, per-user]
-    API --> Search[search route\ncosine similarity, per-user]
+    API --> Search[search route\nnearest-neighbor, per-user]
     API --> Chat[chat route\nRAG]
-    Items --> DB[(Cloud SQL\nPostgres, prod) / (SQLite, local dev)]
+    Items --> DB[(Cloud SQL/pgvector\nPostgres, prod) / (SQLite, local dev)]
     Search --> DB
     Chat --> Search
     Chat --> Provider[AI provider\nOpenAI / Anthropic]
@@ -49,7 +49,12 @@ flowchart LR
 - Every note/task is embedded (OpenAI `text-embedding-3-small`) on write and
   the vector is stored alongside the row, scoped to the owning user.
 - `/api/search` embeds the query and ranks the calling user's own stored
-  items by cosine similarity — a minimal, dependency-free vector search.
+  items by nearest-neighbor search. In production this runs as a real
+  vector-database query — Postgres's `pgvector` extension on Cloud SQL,
+  using the `<=>` cosine-distance operator so ranking happens in the
+  database, not in a Node.js loop. Locally (SQLite, no pgvector available)
+  it falls back to computing cosine similarity in JS — see
+  `ItemRepository.semanticSearch` in [`server/src/db.ts`](server/src/db.ts).
 - `/api/chat` runs the same retrieval step, stuffs the top matches into the
   system prompt, and asks the configured LLM provider to answer with
   citations — a small, from-scratch RAG pipeline.
@@ -74,6 +79,11 @@ with two backends, selected automatically at startup:
   The instance is stopped (`--activation-policy=NEVER`) whenever it's not
   actively being demoed, to minimize cost (~$1-2/month idle vs ~$10-12/month
   running).
+- **`pgvector` extension, enabled on the same Cloud SQL instance** — the
+  `embedding` column is a native `vector(1536)` type (not JSON-in-a-TEXT-
+  column), and `/api/search` ranks rows with pgvector's `<=>` cosine-distance
+  operator directly in SQL. No extra service to run or pay for; it reuses
+  the Postgres instance already provisioned above.
 
 ### GCE + VPC watchdog
 
