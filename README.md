@@ -20,6 +20,7 @@ Built as a single, cohesive demonstration of full-stack + cloud + AI skills:
 | Git & documentation culture | This README, [ADRs](#architecture-decisions), [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | LLM APIs (OpenAI & Anthropic) | [`server/src/services/aiProvider.ts`](server/src/services/aiProvider.ts) — swappable provider |
 | Vector database / embeddings | [`server/src/services/embeddings.ts`](server/src/services/embeddings.ts) + [`server/src/routes/search.ts`](server/src/routes/search.ts) |
+| GCE (VMs) / VPC networking | [`infra/gce-watchdog-startup.sh`](infra/gce-watchdog-startup.sh) — custom VPC + GCE VM watchdog, see below |
 
 ## Architecture
 
@@ -44,6 +45,24 @@ flowchart LR
   system prompt, and asks the configured LLM provider to answer with
   citations — a small, from-scratch RAG pipeline.
 
+### GCE + VPC watchdog
+
+A small `e2-micro` GCE VM (`smart-notes-hub-watchdog`) runs in its own custom
+VPC (`smart-notes-hub-vpc` / `smart-notes-hub-subnet`, `10.10.0.0/24`) and
+polls the Cloud Run app's `/health` endpoint every 15 minutes via a systemd
+timer, logging uptime results locally on the VM. Provisioned with:
+
+- Custom-mode VPC + dedicated subnet (not the default network)
+- Firewall rule restricting SSH to Google's IAP range (`35.235.240.0/20`)
+  only — no SSH port exposed to the public internet
+- VM created with `--no-service-account --no-scopes` (least privilege —
+  the watchdog only needs outbound HTTPS, not GCP API access)
+- Access via `gcloud compute ssh --tunnel-through-iap` (IAP TCP forwarding,
+  no static SSH keys/bastion host)
+
+See [`infra/gce-watchdog-startup.sh`](infra/gce-watchdog-startup.sh) for the
+full startup script and provisioning commands below.
+
 ## Architecture decisions
 
 - **`node:sqlite` over a hosted DB** — zero extra infrastructure/cost for a
@@ -60,6 +79,9 @@ flowchart LR
   files directly, so one container/one deploy covers the whole app.
 - **`/health` instead of `/healthz`** — Cloud Run's edge intercepts
   `/healthz` and returns Google's own 404 before it reaches the container.
+- **Custom VPC + IAP-only SSH for the watchdog VM** — avoids exposing port
+  22 to `0.0.0.0/0`; IAP tunneling authenticates via IAM instead of a
+  standing bastion host or public SSH keys.
 
 ## API
 
@@ -99,7 +121,25 @@ Note: `data.db` lives at `/tmp` inside the container, so data resets on
 cold start/instance recycling — acceptable for a demo, not for production
 (would move to Cloud SQL or a persisted volume for that).
 
+### GCE + VPC watchdog setup
+
+```bash
+gcloud compute networks create smart-notes-hub-vpc --subnet-mode=custom
+gcloud compute networks subnets create smart-notes-hub-subnet \
+  --network=smart-notes-hub-vpc --region=us-central1 --range=10.10.0.0/24
+gcloud compute firewall-rules create allow-iap-ssh \
+  --network=smart-notes-hub-vpc --direction=INGRESS --action=ALLOW \
+  --rules=tcp:22 --source-ranges=35.235.240.0/20
+gcloud compute instances create smart-notes-hub-watchdog \
+  --zone=us-central1-a --machine-type=e2-micro \
+  --network=smart-notes-hub-vpc --subnet=smart-notes-hub-subnet \
+  --image-family=debian-12 --image-project=debian-cloud \
+  --no-service-account --no-scopes \
+  --metadata-from-file=startup-script=infra/gce-watchdog-startup.sh
+```
+
 ## Tech stack
 
 `React` · `TypeScript` · `Vite` · `Node.js` · `Express` · `node:sqlite` ·
-`OpenAI API` · `Anthropic API` · `Docker` · `Google Cloud Run` · `GitHub Actions`
+`OpenAI API` · `Anthropic API` · `Docker` · `Google Cloud Run` · `Compute Engine` ·
+`VPC` · `IAP` · `GitHub Actions`
