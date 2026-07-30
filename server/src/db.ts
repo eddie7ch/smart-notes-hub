@@ -194,6 +194,14 @@ class PostgresItemRepository implements ItemRepository {
         `)
       )
       .then(() => undefined);
+
+    // This chain runs at startup, independent of any request. If nobody has
+    // awaited `this.ready` yet by the time it rejects (e.g. Cloud SQL is
+    // stopped), Node treats it as an unhandled rejection and kills the
+    // process - taking down unrelated routes like /health too. Attaching a
+    // no-op catch here just marks it handled; callers awaiting `this.ready`
+    // still see the rejection and can respond with an error per-request.
+    this.ready.catch(() => {});
   }
 
   async list(userId: string, limit: number, offset: number): Promise<Item[]> {

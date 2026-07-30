@@ -68,6 +68,19 @@ export function ItemList() {
             </div>
             <strong>{item.title}</strong>
             <p>{item.content}</p>
+            {item.updated_at && (
+              <p style={{ fontSize: "0.8rem", opacity: 0.6 }}>
+                Saved{" "}
+                {new Date(item.updated_at).toLocaleString(undefined, {
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </p>
+            )}
             <div style={{ display: "flex", gap: "0.5rem" }}>
               {item.type === "task" && (
                 <button className="secondary" onClick={() => toggleStatus(item)}>

@@ -24,6 +24,13 @@ app.use(generalRateLimiter);
 // Cloud Run intercepts /healthz at the edge, so a custom /health path is used instead.
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
+// Route handlers await DB/AI calls without try/catch, so an unhandled rejection
+// (e.g. a transient DB outage) would otherwise crash the whole process (exit(1))
+// instead of just failing that one request - taking down /health with it.
+process.on("unhandledRejection", (err) => {
+  logger.error(err, "Unhandled promise rejection");
+});
+
 app.use("/api/items", requireAuth, itemsRouter);
 app.use("/api/search", requireAuth, aiRateLimiter, searchRouter);
 app.use("/api/chat", requireAuth, aiRateLimiter, chatRouter);
