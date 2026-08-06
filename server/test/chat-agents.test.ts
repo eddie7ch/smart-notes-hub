@@ -74,6 +74,22 @@ describe("POST /api/chat - agent orchestration", () => {
     expect(res.body.answer).toMatch(/\u26a0\ufe0f/);
   });
 
+  it("routes small talk to the chit-chat agent, skipping retrieval and the critic", async () => {
+    chatMock
+      .mockResolvedValueOnce(JSON.stringify({ kind: "chit_chat" })) // router
+      .mockResolvedValueOnce("Hey! Doing well, thanks for asking."); // chit-chat reply
+
+    const res = await request(app)
+      .post("/api/chat")
+      .set("Authorization", "Bearer user-1-token")
+      .send({ message: "hi, how's it going?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.agentTrace.map((s: { agent: string }) => s.agent)).toEqual(["router", "chit-chat"]);
+    expect(res.body.answer).toBe("Hey! Doing well, thanks for asking.");
+    expect(res.body.answer).not.toMatch(/\u26a0\ufe0f/);
+  });
+
   it("falls back to the question-answering path if the router agent returns invalid JSON", async () => {
     chatMock
       .mockResolvedValueOnce("not valid json at all") // router (malformed)
