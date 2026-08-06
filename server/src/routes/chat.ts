@@ -4,18 +4,23 @@ import {
   createItemFromIntent,
   answerFromNotes,
   checkGroundedness,
+  replyChitChat,
   type AgentStep,
 } from "../services/agents.js";
 
 export const chatRouter = Router();
 
-// /api/chat is a small 3-agent pipeline rather than a single prompt->response
+// /api/chat is a small multi-agent pipeline rather than a single prompt->response
 // call:
-//   1. Router agent    - classifies the message as a create-item request or a
-//                         question to answer from the user's notes/tasks.
+//   1. Router agent    - classifies the message as a create-item request, a
+//                         question to answer from the user's notes/tasks, or
+//                         casual chit-chat.
 //   2a. Action agent   - (create-item path) executes the create as a real
 //                         tool call against the repository.
-//   2b. Retrieval+answer agent (RAG) - (question path) retrieves relevant
+//   2b. Chit-chat agent - (chit-chat path) replies conversationally, with no
+//                         retrieval and no groundedness check - there's
+//                         nothing to ground small talk in.
+//   2c. Retrieval+answer agent (RAG) - (question path) retrieves relevant
 //                         notes/tasks and answers using only that context.
 //   3. Critic agent    - (question path only) an independent LLM call that
 //                         checks the answer is actually grounded in the
@@ -38,6 +43,13 @@ chatRouter.post("/", async (req, res) => {
       const item = await createItemFromIntent(req.userId!, intent);
       trace.push({ agent: "action", summary: `created ${item.type} #${item.id}: "${item.title}"` });
       res.json({ answer: `Created ${item.type} "${item.title}".`, sources: [], agentTrace: trace });
+      return;
+    }
+
+    if (intent.kind === "chit_chat") {
+      const reply = await replyChitChat(message);
+      trace.push({ agent: "chit-chat", summary: "replied conversationally, no retrieval" });
+      res.json({ answer: reply, sources: [], agentTrace: trace });
       return;
     }
 

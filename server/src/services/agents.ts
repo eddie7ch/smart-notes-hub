@@ -25,11 +25,13 @@ function extractJson<T>(raw: string): T {
 
 // --- 1. Router agent -------------------------------------------------------
 // Classifies intent before any retrieval happens: is the user asking a
-// question that should be answered from their existing notes/tasks, or
-// asking to create a new one ("remind me to...", "add a task...")?
+// question that should be answered from their existing notes/tasks, asking
+// to create a new one ("remind me to...", "add a task..."), or just making
+// small talk that has nothing to do with their notes/tasks at all?
 export type Intent =
   | { kind: "create_item"; type: "note" | "task"; title: string; content: string }
-  | { kind: "answer_question" };
+  | { kind: "answer_question" }
+  | { kind: "chit_chat" };
 
 export async function routeIntent(message: string): Promise<Intent> {
   const messages: ChatMessage[] = [
@@ -37,11 +39,14 @@ export async function routeIntent(message: string): Promise<Intent> {
       role: "system",
       content:
         "You are a routing agent for a notes/tasks assistant. Decide whether the user's message is " +
-        "(a) asking a question that should be answered using their existing notes/tasks, or " +
-        "(b) asking to create a new note or task.\n\n" +
+        "(a) asking a question that should be answered using their existing notes/tasks, " +
+        "(b) asking to create a new note or task, or " +
+        "(c) casual conversation/small talk (greetings, thanks, how-are-you, etc.) that isn't actually " +
+        "asking about their notes/tasks.\n\n" +
         "Reply with ONLY a JSON object, no other text:\n" +
         '- For (a): {"kind":"answer_question"}\n' +
-        '- For (b): {"kind":"create_item","type":"note"|"task","title":"...","content":"..."}',
+        '- For (b): {"kind":"create_item","type":"note"|"task","title":"...","content":"..."}\n' +
+        '- For (c): {"kind":"chit_chat"}',
     },
     { role: "user", content: message },
   ];
@@ -55,7 +60,23 @@ export async function routeIntent(message: string): Promise<Intent> {
   }
 }
 
-// --- 2a. Action agent --------------------------------------------------
+// --- 2a. Chit-chat agent ----------------------------------------------------
+// Handles small talk directly with a plain conversational reply - no
+// retrieval and no groundedness critic, since there's nothing to ground.
+export async function replyChitChat(message: string): Promise<string> {
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content:
+        "You are a friendly assistant for a personal notes/tasks app. The user is just making small talk " +
+        "(not asking about their notes/tasks). Reply briefly and naturally.",
+    },
+    { role: "user", content: message },
+  ];
+  return getAiProvider().chat(messages);
+}
+
+// --- 2b. Action agent --------------------------------------------------
 // Executes the "create_item" intent as a real tool call against the
 // repository - the agent's decision has a side effect, not just a suggestion.
 export async function createItemFromIntent(
@@ -71,7 +92,7 @@ export async function createItemFromIntent(
   return itemRepository.create(userId, intent.type, intent.title, intent.content, "open", embedding);
 }
 
-// --- 2b. Retrieval + answer agent (RAG) -------------------------------------
+// --- 2c. Retrieval + answer agent (RAG) -------------------------------------
 export async function answerFromNotes(
   userId: string,
   message: string
