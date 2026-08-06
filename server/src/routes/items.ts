@@ -27,8 +27,8 @@ itemsRouter.get("/", async (req, res) => {
 
 itemsRouter.post("/", async (req, res) => {
   const { type, title, content, status } = req.body as Partial<Item>;
-  if (!type || !title || !content || !["note", "task"].includes(type)) {
-    res.status(400).json({ error: "type ('note'|'task'), title, and content are required" });
+  if (!type || !title || !content || !["note", "task", "sop"].includes(type)) {
+    res.status(400).json({ error: "type ('note'|'task'|'sop'), title, and content are required" });
     return;
   }
 
