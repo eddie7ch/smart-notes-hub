@@ -7,6 +7,7 @@ import { pinoHttp } from "pino-http";
 import { itemsRouter } from "./routes/items.js";
 import { searchRouter } from "./routes/search.js";
 import { chatRouter } from "./routes/chat.js";
+import { coachRouter } from "./routes/coach.js";
 import { requireAuth } from "./middleware/auth.js";
 import { aiRateLimiter, generalRateLimiter } from "./middleware/rateLimit.js";
 import { logger } from "./logger.js";
@@ -34,6 +35,7 @@ process.on("unhandledRejection", (err) => {
 app.use("/api/items", requireAuth, itemsRouter);
 app.use("/api/search", requireAuth, aiRateLimiter, searchRouter);
 app.use("/api/chat", requireAuth, aiRateLimiter, chatRouter);
+app.use("/api/coach", requireAuth, aiRateLimiter, coachRouter);
 
 // Serve the built client so the API and UI ship as a single Cloud Run service.
 const clientDist = path.join(__dirname, "..", "..", "client", "dist");

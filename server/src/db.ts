@@ -17,7 +17,10 @@ export interface ScoredItem {
 export interface Item {
   id: number;
   user_id: string;
-  type: "note" | "task";
+  // "sop" = Standard Operating Procedure: a numbered list of expert-authored
+  // steps (stored as text in `content`), used by /api/coach to guide a
+  // trainee through it step by step. See services/coaching.ts.
+  type: "note" | "task" | "sop";
   title: string;
   content: string;
   status: string;
@@ -60,7 +63,7 @@ class SqliteItemRepository implements ItemRepository {
       CREATE TABLE IF NOT EXISTS items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        type TEXT NOT NULL CHECK (type IN ('note', 'task')),
+        type TEXT NOT NULL CHECK (type IN ('note', 'task', 'sop')),
         title TEXT NOT NULL,
         content TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'open',
@@ -69,6 +72,9 @@ class SqliteItemRepository implements ItemRepository {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
+    // sqlite CHECK constraints aren't ALTERable; a local dev/test data.db
+    // created before 'sop' existed would reject new SOP rows. That file is
+    // gitignored/disposable, so the fix is just deleting it, not a migration.
   }
 
   async list(userId: string, limit: number, offset: number): Promise<Item[]> {
@@ -167,7 +173,7 @@ class PostgresItemRepository implements ItemRepository {
           `CREATE TABLE IF NOT EXISTS items (
             id SERIAL PRIMARY KEY,
             user_id TEXT NOT NULL,
-            type TEXT NOT NULL CHECK (type IN ('note', 'task')),
+            type TEXT NOT NULL CHECK (type IN ('note', 'task', 'sop')),
             title TEXT NOT NULL,
             content TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'open',
@@ -191,6 +197,14 @@ class PostgresItemRepository implements ItemRepository {
               ALTER TABLE items ADD COLUMN embedding vector(1536);
             END IF;
           END $$;
+        `)
+      )
+      .then(() =>
+        // One-time migration for instances created before the 'sop' item type
+        // (Expert Digitization) existed - widens the old CHECK constraint.
+        this.pool.query(`
+          ALTER TABLE items DROP CONSTRAINT IF EXISTS items_type_check;
+          ALTER TABLE items ADD CONSTRAINT items_type_check CHECK (type IN ('note', 'task', 'sop'));
         `)
       )
       .then(() => undefined);

@@ -1,9 +1,12 @@
 # Smart Notes Hub
 
 A full-stack notes & task manager with retrieval-augmented (RAG) semantic
-search and an AI chat assistant that can answer questions using your own
-notes as context. Built end-to-end (architecture, implementation, deployment,
-docs) as a single solo project.
+search and a small multi-agent AI pipeline behind `/api/chat`: a router agent
+classifies what you want, a second agent either creates the item or answers
+from your notes, and (on the question-answering path) a third, independent
+critic agent checks the answer is actually grounded in your notes before it's
+returned. Built end-to-end (architecture, implementation, deployment, docs)
+as a single solo project.
 
 **Live demo:** [smart-notes-hub-651554012781.us-central1.run.app](https://smart-notes-hub-651554012781.us-central1.run.app) — deployed on Google Cloud Run
 
@@ -19,6 +22,8 @@ Built as a single, cohesive demonstration of full-stack + cloud + AI skills:
 | System design / architecture | Layered routes → services → data (see below) |
 | Git & documentation culture | This README, [ADRs](#architecture-decisions), [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | LLM APIs (OpenAI & Anthropic) | [`server/src/services/aiProvider.ts`](server/src/services/aiProvider.ts) — swappable provider |
+| Multi-agent orchestration | [`server/src/services/agents.ts`](server/src/services/agents.ts) — router → action/RAG → critic agent pipeline, see below |
+| Expert Digitization + Autonomous Coaching | [`server/src/services/coaching.ts`](server/src/services/coaching.ts) + [`server/src/routes/coach.ts`](server/src/routes/coach.ts) — `sop` item type + step-by-step coaching agent, see below |
 | Vector database / embeddings | pgvector on Cloud SQL (Postgres) in production via [`server/src/db.ts`](server/src/db.ts), OpenAI embeddings via [`server/src/services/embeddings.ts`](server/src/services/embeddings.ts) |
 | GCE (VMs) / VPC networking | [`infra/gce-watchdog-startup.sh`](infra/gce-watchdog-startup.sh) — custom VPC + GCE VM watchdog, see below |
 | Per-user authentication | [`server/src/middleware/auth.ts`](server/src/middleware/auth.ts) — Firebase Authentication (email/password), Firebase ID tokens verified server-side |
@@ -38,11 +43,18 @@ flowchart LR
     API -->|verifyIdToken| FirebaseAuth
     API --> Items[items routes\nCRUD, per-user]
     API --> Search[search route\nnearest-neighbor, per-user]
-    API --> Chat[chat route\nRAG]
+    API --> Chat[chat route\nagent orchestrator]
     Items --> DB[(Cloud SQL/pgvector\nPostgres, prod) / (SQLite, local dev)]
     Search --> DB
-    Chat --> Search
-    Chat --> Provider[AI provider\nOpenAI / Anthropic]
+    Chat --> Router[1. Router agent]
+    Router -->|create_item| Action[2a. Action agent\ntool call: create item]
+    Router -->|answer_question| RAG[2b. Retrieval+answer agent]
+    RAG --> Search
+    Action --> DB
+    RAG --> Critic[3. Critic agent\ngroundedness check]
+    Router --> Provider[AI provider\nOpenAI / Anthropic]
+    RAG --> Provider
+    Critic --> Provider
     Items -.embed on write.-> OpenAIEmbed[OpenAI embeddings]
 ```
 
@@ -55,9 +67,30 @@ flowchart LR
   database, not in a Node.js loop. Locally (SQLite, no pgvector available)
   it falls back to computing cosine similarity in JS — see
   `ItemRepository.semanticSearch` in [`server/src/db.ts`](server/src/db.ts).
-- `/api/chat` runs the same retrieval step, stuffs the top matches into the
-  system prompt, and asks the configured LLM provider to answer with
-  citations — a small, from-scratch RAG pipeline.
+- `/api/chat` is a small multi-agent pipeline ([`server/src/services/agents.ts`](server/src/services/agents.ts)),
+  not a single prompt → response call:
+  1. **Router agent** classifies the message as either a request to create a
+     new note/task, or a question to answer from existing ones.
+  2. **Action agent** (create path) — executes the create as a real tool
+     call against the repository, not just a suggested action.
+     **Retrieval + answer agent** (question path) — runs the RAG step
+     (retrieve top matches, stuff into the system prompt, ask the LLM to
+     answer with citations).
+  3. **Critic agent** (question path only) — a second, independent LLM call
+     that checks whether the answer's claims are actually supported by the
+     retrieved sources, and flags the response if not (catches hallucination
+     the first agent can't self-detect).
+  The response includes an `agentTrace` array showing which agents ran and
+  what each one decided, for observability/debugging.
+- **Expert Digitization + Autonomous Coaching** (a lightweight, working analog
+  of that pattern): an item can be `type: "sop"` — a Standard Operating
+  Procedure whose `content` is a plain numbered list of expert-authored steps
+  ("digitizing" a procedure, not just storing a note). `/api/coach/:id` then
+  acts as a coaching agent: it walks a trainee through the SOP one step at a
+  time, and for each step compares the trainee's stated action against that
+  step's expected text, grounded in the SOP itself rather than the model's own
+  general knowledge — returning whether they can advance, plus instructor-style
+  feedback. See [`server/src/services/coaching.ts`](server/src/services/coaching.ts).
 - Users sign in with email/password via Firebase Authentication; the client
   attaches the resulting Firebase ID token as a `Bearer` token on every API
   call, and the server verifies it (`firebase-admin`) to identify the user
@@ -126,6 +159,12 @@ full startup script and provisioning commands below.
   switch between OpenAI and Anthropic via one env var, without touching the
   RAG pipeline. Embeddings always use OpenAI since Anthropic has no
   embeddings endpoint.
+- **Router → action/RAG → critic agent pipeline over one prompt (`agents.ts`)**
+  — a single LLM call can't both decide intent and self-check its own answer
+  reliably. Splitting into a router agent (classify), an action/RAG agent
+  (act), and an independent critic agent (verify groundedness) catches
+  hallucination the first agent can't see, and makes each step separately
+  testable/mockable (see `server/test/chat-agents.test.ts`).
 - **Single Cloud Run service** — the server serves the built client's static
   files directly, so one container/one deploy covers the whole app.
 - **`/health` instead of `/healthz`** — Cloud Run's edge intercepts
@@ -149,7 +188,9 @@ endpoints).
 | PUT | `/api/items/:id` | Bearer token | Update a note/task (must be owned by the caller) |
 | DELETE | `/api/items/:id` | Bearer token | Delete a note/task (must be owned by the caller) |
 | POST | `/api/search` | Bearer token | Semantic search over the caller's own items `{ query, k? }` |
-| POST | `/api/chat` | Bearer token | RAG chat over the caller's own items `{ message }` → `{ answer, sources }` |
+| POST | `/api/chat` | Bearer token | Multi-agent chat: creates an item or answers from the caller's own items `{ message }` → `{ answer, sources, agentTrace }` |
+| GET | `/api/coach/:id` | Bearer token | Start/resume a coaching session on the caller's own `sop` item `?stepIndex=` (default 0) → `{ stepIndex, totalSteps, step }` |
+| POST | `/api/coach/:id` | Bearer token | Coaching agent: evaluate a trainee's answer for one SOP step `{ stepIndex, answer }` → `{ correct, feedback, stepIndex, nextStep, done }` |
 
 Real secrets (OpenAI/Anthropic API keys, the Cloud SQL app password) never
 reach the client — they're injected server-side only, via Secret Manager.
